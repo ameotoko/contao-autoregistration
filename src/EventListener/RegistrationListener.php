@@ -3,7 +3,7 @@
 /*
  * autoregistration extension for Contao Open Source CMS
  *
- * @copyright  Copyright (c) 2018, terminal42 gmbh
+ * @copyright  Copyright (c) 2020, terminal42 gmbh
  * @author     terminal42 gmbh <info@terminal42.ch>
  * @license    MIT
  * @link       http://github.com/terminal42/contao-autoregistration
@@ -14,6 +14,7 @@ namespace Terminal42\AutoRegistrationBundle\EventListener;
 use Contao\CoreBundle\Monolog\ContaoContext;
 use Contao\FrontendUser;
 use Contao\MemberModel;
+use Contao\Module;
 use Contao\PageModel;
 use Doctrine\DBAL\Connection;
 use Psr\Log\LoggerInterface;
@@ -74,15 +75,6 @@ class RegistrationListener
 
     /**
      * RegistrationListener constructor.
-     *
-     * @param UserProviderInterface                 $userProvider
-     * @param TokenStorageInterface                 $tokenStorage
-     * @param Connection                            $connection
-     * @param LoggerInterface                       $logger
-     * @param EventDispatcherInterface              $eventDispatcher
-     * @param RequestStack                          $requestStack
-     * @param UserCheckerInterface                  $userChecker
-     * @param AuthenticationSuccessHandlerInterface $authenticationSuccessHandler
      */
     public function __construct(UserProviderInterface $userProvider, TokenStorageInterface $tokenStorage, Connection $connection, LoggerInterface $logger, EventDispatcherInterface $eventDispatcher, RequestStack $requestStack, UserCheckerInterface $userChecker, AuthenticationSuccessHandlerInterface $authenticationSuccessHandler)
     {
@@ -102,7 +94,7 @@ class RegistrationListener
      * @param int   $userId The user id
      * @param array $data   The user data of the registration module
      */
-    public function onCreateNewUser(int $userId, array $data): void
+    public function onCreateNewUser(int $userId, array $data, Module $moduleRegistration): void
     {
         global $objPage;
 
@@ -123,17 +115,17 @@ class RegistrationListener
             ;
 
             if ($pageModel->auto_login_registration && $match) {
-                $this->loginUser($data['username']);
+                /** @var PageModel|null $jumpTo */
+                $jumpTo = $moduleRegistration->getModel()->getRelated('jumpTo');
+                $this->loginUser($data['username'], $jumpTo);
             }
         }
     }
 
     /**
      * Within the activation process, log in the user if needed.
-     *
-     * @param MemberModel $member
      */
-    public function onActivateAccount(MemberModel $member): void
+    public function onActivateAccount(MemberModel $member, Module $moduleRegistration): void
     {
         global $objPage;
 
@@ -144,16 +136,16 @@ class RegistrationListener
         }
 
         if ($pageModel->auto_login_activation) {
-            $this->loginUser($member->username);
+            /** @var PageModel|null $jumpTo */
+            $jumpTo = $moduleRegistration->getModel()->getRelated('reg_jumpTo');
+            $this->loginUser($member->username, $jumpTo);
         }
     }
 
     /**
      * Actually log in the user by given username.
-     *
-     * @param string $username
      */
-    private function loginUser(string $username): void
+    private function loginUser(string $username, PageModel $jumpTo = null): void
     {
         try {
             $user = $this->userProvider->loadUserByUsername($username);
@@ -184,9 +176,13 @@ class RegistrationListener
             ['contao' => new ContaoContext(__METHOD__, TL_ACCESS)]
         );
 
-        $this->authenticationSuccessHandler->onAuthenticationSuccess(
-            $this->requestStack->getCurrentRequest(),
-            $usernamePasswordToken
-        );
+        $request = $this->requestStack->getCurrentRequest();
+        if (null === $request || null === $jumpTo) {
+            return;
+        }
+
+        $request->request->set('_target_path', base64_encode($jumpTo->getFrontendUrl()));
+
+        $this->authenticationSuccessHandler->onAuthenticationSuccess($request, $usernamePasswordToken);
     }
 }
